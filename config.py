@@ -1,5 +1,5 @@
-BOT_TOKEN = "8047185520:AAG0c-Ihm1mbKb7AsP5IJhQoHYJz1spIFNE"
-ADMIN_GROUP_ID = -1002981223017
+BOT_TOKEN = 
+ADMIN_GROUP_ID = 
 
 BONUS_PERCENT = 0.1       # 10% бонусов от суммы заказа
 MAX_DISCOUNT = 0.15       # Максимальная скидка 15%
