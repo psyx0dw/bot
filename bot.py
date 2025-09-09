@@ -48,12 +48,16 @@ class DBManager:
             print(f"❌ An error occurred during database initialization: {e}")
 
     def get_user(self, telegram_id):
-        """Получает данные пользователя, включая количество рефералов."""
+        """
+        Получает данные пользователя, включая количество рефералов и количество заказов.
+        Обновлено для вывода количества заказов в профиле.
+        """
         with self.get_conn() as conn:
             cur = conn.cursor()
             cur.execute("""
                 SELECT u.*,
-                       (SELECT COUNT(*) FROM users WHERE referrer_id = u.id) AS referrals
+                       (SELECT COUNT(*) FROM users WHERE referrer_id = u.id) AS referrals,
+                       (SELECT COUNT(*) FROM orders WHERE user_id = u.id) AS order_count
                 FROM users u WHERE telegram_id = ?
             """, (telegram_id,))
             return cur.fetchone()
@@ -336,7 +340,7 @@ def show_cart(message):
     
     total = sum(it["price"] * it["qty"] for it in items)
     points = user[5] or 0
-    referrals = user[-1] or 0
+    referrals = user[-2] or 0 # Изменено на -2, так как добавилось поле orders_count
     
     is_challenge_eligible = points >= 500 and referrals >= 10
     
@@ -373,7 +377,7 @@ def activate_15_percent(call):
         return
         
     points = user[5] or 0
-    referrals = user[-1] or 0
+    referrals = user[-2] or 0 # Изменено на -2, так как добавилось поле orders_count
 
     if not (points >= 500 and referrals >= 10):
         bot.answer_callback_query(call.id, "❌ Вы не соответствуете условиям для скидки 15%.")
@@ -555,7 +559,10 @@ def send_admin_message(message, telegram_id, order_id):
 
 @bot.message_handler(func=lambda m: m.text == "👤 Мой профиль")
 def show_profile(message):
-    """Показывает информацию о профиле пользователя."""
+    """
+    Показывает лаконичную информацию о профиле пользователя.
+    Теперь включает баллы, количество друзей и заказов.
+    """
     telegram_id = str(message.chat.id)
     user = db_manager.get_user(telegram_id)
     if not user:
@@ -563,34 +570,41 @@ def show_profile(message):
         return
         
     points = user[5] or 0
-    referrals = user[-1] or 0
-
+    referrals = user[-2] or 0 # Изменено на -2, так как добавилось поле orders_count
+    orders = user[-1] or 0
+    
     text = (
-        f"👤 <b>Профиль пользователя {user[2]}</b>\n\n"
-        f"Твои текущие баллы: <b>{points}</b>\n"
-        f"Количество приглашённых друзей: <b>{referrals}</b>\n\n"
-        "🔗 **Челлендж «15% скидка»**:\n"
-        f"• Накопить <b>500</b> баллов (у тебя сейчас: {points})\n"
-        f"• Пригласить <b>10</b> друзей (у тебя сейчас: {referrals})\n\n"
-        "<i>За активацию скидки 15% будет списано 500 баллов.</i>"
+        f"👤 <b>Твой профиль:</b>\n"
+        f"• Баллы: <b>{points}</b>\n"
+        f"• Приглашено друзей: <b>{referrals}</b>\n"
+        f"• Сделано заказов: <b>{orders}</b>"
     )
     bot.send_message(telegram_id, text, parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "🔗 Реферальная программа")
 def show_referral_program(message):
-    """Показывает реферальную программу и ссылку."""
+    """
+    Показывает реферальную программу, включая подробную информацию о челлендже.
+    """
     telegram_id = str(message.chat.id)
     user = db_manager.get_user(telegram_id)
     if not user:
         bot.send_message(telegram_id, "Пожалуйста, сначала зарегистрируйтесь. Нажмите /start.")
         return
 
+    points = user[5] or 0
+    referrals = user[-2] or 0
+    
     text = (
         "🔗 **Реферальная программа**\n\n"
         f"Приглашай друзей и получай {REFERRAL_BONUS} баллов за каждого, кто сделает свой первый заказ по твоей ссылке!\n\n"
-        "Твоя реферальная ссылка:\n"
+        "🔗 **Твоя реферальная ссылка:**\n"
         f"https://t.me/{bot.get_me().username}?start={telegram_id}\n\n"
-        "Просто скопируй и отправь её друзьям!"
+        "✨ **Челлендж «15% скидка»**\n"
+        "Заработай <b>15%</b> скидку на один заказ! Для этого нужно:\n"
+        f"• Накопить <b>500</b> баллов (у тебя сейчас: {points})\n"
+        f"• Пригласить <b>10</b> друзей (у тебя сейчас: {referrals})\n\n"
+        "<i>За активацию скидки 15% будет списано 500 баллов.</i>"
     )
     bot.send_message(telegram_id, text, parse_mode="HTML")
 
@@ -693,7 +707,7 @@ def process_excel_upload(message):
                         price = int(price)
                         qty = int(qty)
                         cur.execute("INSERT OR REPLACE INTO stock (category, name, size, price, quantity) VALUES (?, ?, ?, ?, ?)",
-                                     (cat.strip(), name.strip(), str(size).strip(), price, qty))
+                                    (cat.strip(), name.strip(), str(size).strip(), price, qty))
                         items_added += 1
                     except (ValueError, TypeError):
                         continue
@@ -751,80 +765,78 @@ def apply_delete_item(message):
     except Exception:
         bot.send_message(message.chat.id, "❌ Неверный формат. Попробуй еще раз.")
 
-@bot.message_handler(func=lambda m: m.text == "🧾 Последние заказы")
-def show_recent_orders(message):
-    """Показывает список последних 10 заказов."""
-    if message.chat.id != ADMIN_GROUP_ID: return
-    rows = db_manager.get_recent_orders()
-    if not rows:
-        bot.send_message(message.chat.id, "🧾 Нет последних заказов.")
-        return
-    text = "🧾 <b>Последние 10 заказов:</b>\n"
-    for order_id, user_name, total, created_at in rows:
-        text += f"• №{order_id} от {user_name} ({created_at.split('.')[0]}) — {total}₽\n"
-    bot.send_message(message.chat.id, text, parse_mode="HTML")
-
 @bot.message_handler(func=lambda m: m.text == "📊 Статистика")
-def show_stats(message):
-    """Показывает общую статистику по заказам и пользователям."""
+def show_admin_stats(message):
+    """Показывает общую статистику в админ-панели."""
     if message.chat.id != ADMIN_GROUP_ID: return
-    count, revenue, users = db_manager.get_admin_data()
-    text = f"📊 <b>Статистика:</b>\nЗаказов: {count or 0}\nВыручка: {revenue or 0}₽\nПользователей: {users or 0}"
-    bot.send_message(message.chat.id, text, parse_mode="HTML")
+    order_count, total_revenue, user_count = db_manager.get_admin_data()
+    text = (
+        "📊 **Статистика:**\n"
+        f"• Общее количество заказов: {order_count or 0}\n"
+        f"• Общая выручка: {total_revenue or 0}₽\n"
+        f"• Всего пользователей: {user_count or 0}"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "⚠️ Низкие остатки")
 def show_low_stock(message):
-    """Показывает товары с низким остатком."""
+    """Показывает товары с низким остатком в админ-панели."""
     if message.chat.id != ADMIN_GROUP_ID: return
-    rows = db_manager.get_low_stock()
-    if not rows:
-        bot.send_message(message.chat.id, "Все остатки в норме ✅")
+    low_stock_items = db_manager.get_low_stock()
+    if not low_stock_items:
+        bot.send_message(message.chat.id, "✅ На складе нет товаров с низким остатком.")
         return
-    text = "⚠️ <b>Низкие остатки:</b>\n"
-    for cat, name, size, qty in rows:
-        text += f"• {cat}: {name} {size}л — {qty} шт\n"
+    text = "⚠️ **Товары с низким остатком (<3 шт.):**\n"
+    for cat, name, size, qty in low_stock_items:
+        text += f"• {name} {size}л — {qty} шт.\n"
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text == "🧾 Последние заказы")
+def show_recent_orders(message):
+    """Показывает список последних заказов в админ-панели."""
+    if message.chat.id != ADMIN_GROUP_ID: return
+    orders = db_manager.get_recent_orders()
+    if not orders:
+        bot.send_message(message.chat.id, "🧾 Пока нет выполненных заказов.")
+        return
+    text = "🧾 **Последние 10 заказов:**\n\n"
+    for order_id, user_name, total, created_at in orders:
+        dt_obj = datetime.datetime.strptime(created_at.split(".")[0], "%Y-%m-%d %H:%M:%S")
+        text += (
+            f"<b>№{order_id}</b> от <b>{user_name}</b>\n"
+            f"  Сумма: {total}₽\n"
+            f"  Время: {dt_obj.strftime('%H:%M:%S %d.%m.%Y')}\n\n"
+        )
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-# --- Общий обработчик текстовых сообщений ---
-@bot.message_handler(func=lambda m: True)
-def handle_text(message):
-    """Общий обработчик текстовых сообщений для добавления в корзину."""
+
+@bot.message_handler(content_types=["text"])
+def handle_text_message(message):
+    """Обрабатывает текстовые сообщения для добавления товаров в корзину."""
     telegram_id = str(message.chat.id)
-    text = message.text.strip()
-    
-    if text.startswith('/') or not db_manager.get_user(telegram_id) or text in ["➕ Добавить ещё", "✅ Перейти к оформлению"]:
+    parts = message.text.strip().rsplit(" ", 1)
+    if len(parts) < 2 or not parts[1].endswith("л"):
         return
 
+    name = parts[0]
+    size_str = parts[1].replace("л", "")
+    
+    price, qty = db_manager.get_stock_by_name_size(name, size_str)
+    
+    if price is None or qty <= 0:
+        bot.send_message(telegram_id, f"❌ Извините, товара '{message.text}' нет в наличии.")
+        return
+
+    db_manager.add_to_cart(telegram_id, message.text, price, 1)
+    bot.send_message(telegram_id, f"✅ Добавил '{message.text}' в корзину.", reply_markup=handle_add_more_keyboard())
+
+def main():
     try:
-        parts = text.rsplit(" ", 1)
-        if len(parts) != 2 or not parts[1].endswith("л"):
-            raise ValueError
-            
-        name, size = parts[0], parts[1].replace("л", "").strip()
-        float(size) # Проверка, что размер - число
-    except (ValueError, IndexError):
-        bot.send_message(telegram_id, "❌ Неверный формат. Попробуй ввести название и объем, например: <i>Латте 0.3л</i>", parse_mode="HTML")
-        return
-
-    price, qty = db_manager.get_stock_by_name_size(name, size)
-    
-    if qty < 1:
-        bot.send_message(telegram_id, f"❌ {name} {size}л закончился.")
-        return
-    
-    db_manager.add_to_cart(telegram_id, f"{name} {size}л", price, 1)
-    
-    bot.send_message(
-        telegram_id,
-        f"✅ <b>{name} {size}л</b> добавлен в корзину! Хочешь добавить ещё?",
-        reply_markup=handle_add_more_keyboard(),
-        parse_mode="HTML"
-    )
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(f"❌ An error occurred: {e}")
+        time.sleep(5)
+        main()
 
 if __name__ == '__main__':
-    while True:
-        try:
-            bot.polling(none_stop=True)
-        except Exception as e:
-            print(f"Polling error: {e}")
-            time.sleep(15) # Ждём 15 секунд перед перезапуском
+    main()
