@@ -277,7 +277,7 @@ def start(message):
     if user:
         bot.send_message(telegram_id, f"☕ С возвращением, <b>{user[2]}</b>!", reply_markup=main_keyboard(), parse_mode="HTML")
     else:
-        msg = bot.send_message(telegram_id, "☕ Привет! Я — бот кофейни. Как тебя зовут?", parse_mode="HTML")
+        msg = bot.send_message(telegram_id, "☕ Привет! Я Кофейный!. Как тебя зовут?", parse_mode="HTML")
         bot.register_next_step_handler(msg, finish_registration, referrer_telegram_id)
 
 def finish_registration(message, referrer_telegram_id=None):
@@ -313,7 +313,7 @@ def show_menu(message):
     """Показывает клиенту текущее меню."""
     rows = db_manager.get_menu()
     if not rows:
-        bot.send_message(message.chat.id, "📭 Меню пока пустое — добавьте позиции в админ-панели.", parse_mode="HTML")
+        bot.send_message(message.chat.id, "📭 Меню пока пустое.", parse_mode="HTML")
         return
 
     text = "📋 <b>Наше меню:</b>\n"
