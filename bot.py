@@ -1,4 +1,4 @@
-# coding: utf-8 -*-
+# coding: utf-8
 import telebot
 from telebot import types
 import sqlite3
@@ -18,6 +18,7 @@ local_storage = threading.local()
 
 class DBManager:
     """Класс для управления всеми операциями с базой данных."""
+
     def __init__(self, db_path):
         self.db_path = db_path
         self._init_db_if_not_exists()
@@ -34,7 +35,6 @@ class DBManager:
             if not os.path.exists(self.db_path):
                 with open(sql_file, 'r', encoding='utf-8') as f:
                     sql_script = f.read()
-                
                 with self.get_conn() as conn:
                     conn.executescript(sql_script)
                 print(f"✅ Database tables created from {sql_file}.")
@@ -73,8 +73,7 @@ class DBManager:
             if referrer_telegram_id:
                 cur.execute("SELECT id FROM users WHERE telegram_id = ?", (referrer_telegram_id,))
                 r = cur.fetchone()
-                if r:
-                    referrer_id = r[0]
+                referrer_id = r[0] if r else None
             cur.execute("""
                 INSERT OR IGNORE INTO users (telegram_id, name, referrer_id)
                 VALUES (?, ?, ?)
@@ -95,22 +94,22 @@ class DBManager:
             return cur.fetchall()
 
     def get_stock_by_fullname(self, full_name):
-        """Получает количество товара по его полному названию."""
+        """Получает цену и количество товара по его полному названию."""
         if not full_name.endswith("л"):
-            return 0
+            return None, 0
         name, size_l = full_name.rsplit(" ", 1)
-        size = size_l.replace("л", "")
+        size = size_l.replace("л", "").strip()
         with self.get_conn() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT price, quantity FROM stock WHERE LOWER(name)=LOWER(?) AND size=?", (name.strip(), size))
+            cur.execute("SELECT price, quantity FROM stock WHERE LOWER(name) = LOWER(?) AND size = ?", (name.strip(), size))
             row = cur.fetchone()
-            return row[0] if row else None, row[1] if row else 0
+            return (row[0] if row else None, row[1] if row else 0)
 
     def get_stock_by_name_size(self, name, size):
         """Получает информацию о товаре по имени и размеру."""
         with self.get_conn() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT price, quantity FROM stock WHERE LOWER(name)=LOWER(?) AND size=?", (name.strip(), size))
+            cur.execute("SELECT price, quantity FROM stock WHERE LOWER(name) = LOWER(?) AND size = ?", (name.strip(), size))
             return cur.fetchone()
 
     def reduce_stock(self, full_name, qty):
@@ -118,7 +117,7 @@ class DBManager:
         if not full_name.endswith("л"):
             return
         name, size_l = full_name.rsplit(" ", 1)
-        size = size_l.replace("л", "")
+        size = size_l.replace("л", "").strip()
         with self.get_conn() as conn:
             conn.execute("""
                 UPDATE stock SET quantity = quantity - ?
@@ -126,7 +125,7 @@ class DBManager:
             """, (qty, name, size, qty))
             conn.commit()
             cur = conn.cursor()
-            cur.execute("SELECT quantity FROM stock WHERE name=? AND size=?", (name, size))
+            cur.execute("SELECT quantity FROM stock WHERE name = ? AND size = ?", (name, size))
             row = cur.fetchone()
             if row and row[0] < 3:
                 bot.send_message(ADMIN_GROUP_ID, f"⚠️ Остаток низкий: {name} {size}л — {row[0]} шт")
@@ -145,7 +144,8 @@ class DBManager:
     def add_to_cart(self, telegram_id, item_name, price, qty):
         """Добавляет позицию в корзину в БД."""
         user_id = self.get_user_id(telegram_id)
-        if not user_id: return
+        if not user_id:
+            return
         with self.get_conn() as conn:
             conn.execute("""
                 INSERT INTO cart (user_id, name, price, qty)
@@ -162,19 +162,19 @@ class DBManager:
     def create_order(self, telegram_id, items, total):
         """Создает новый заказ в БД."""
         user_id = self.get_user_id(telegram_id)
-        if not user_id: return None
+        if not user_id:
+            return None
         with self.get_conn() as conn:
             cur = conn.cursor()
-            cur.execute("INSERT INTO orders (user_id, total, created_at) VALUES (?, ?, ?)", (user_id, total, datetime.datetime.now()))
+            cur.execute("INSERT INTO orders (user_id, total, created_at) VALUES (?, ?, ?)",
+                        (user_id, total, datetime.datetime.now()))
             order_id = cur.lastrowid
-            for it in items:
-                cur.execute(
-                    "INSERT INTO order_items (order_id, name, price, qty) VALUES (?, ?, ?, ?)",
-                    (order_id, it["name"], it["price"], it["qty"])
-                )
+            for item in items:
+                cur.execute("INSERT INTO order_items (order_id, name, price, qty) VALUES (?, ?, ?, ?)",
+                            (order_id, item["name"], item["price"], item["qty"]))
             conn.commit()
             return order_id
-    
+
     def get_admin_data(self):
         """Получает данные для админ-панели."""
         with self.get_conn() as conn:
@@ -183,7 +183,7 @@ class DBManager:
             count, revenue = cur.fetchone()
             cur.execute("SELECT COUNT(*) FROM users")
             users = cur.fetchone()[0]
-            return count, revenue, users
+            return count or 0, revenue or 0, users or 0
 
     def get_low_stock(self):
         """Получает товары с низким остатком."""
@@ -234,7 +234,7 @@ def calc_discount(total, points):
 
 def format_cart_lines(items):
     """Форматирует список позиций в корзине."""
-    return "\n".join([f"• {it['name']} x{it['qty']} — {it['price']}₽" for it in items])
+    return "\n".join(f"• {item['name']} x{item['qty']} — {item['price']}₽" for item in items)
 
 # --- Клавиатуры ---
 def main_keyboard():
@@ -257,17 +257,14 @@ def start(message):
     """Обработчик команды /start."""
     telegram_id = str(message.chat.id)
     referrer_telegram_id = None
-    if message.text.startswith("/start "):
-        try:
-            referrer_telegram_id = message.text.split(" ", 1)[1]
-            if referrer_telegram_id == telegram_id or not db_manager.get_user(referrer_telegram_id):
-                bot.send_message(telegram_id, "Ой, хитрец! 😜 Сам себя не пригласишь или ссылка недействительна.")
-                referrer_telegram_id = None
-            else:
-                bot.send_message(telegram_id, "🤝 Привет! Ты перешел по реферальной ссылке.")
-        except IndexError:
-            pass
-    
+    if len(message.text.split()) > 1:
+        referrer_telegram_id = message.text.split()[1]
+        if referrer_telegram_id == telegram_id or not db_manager.get_user(referrer_telegram_id):
+            bot.send_message(telegram_id, "Ой, хитрец! 😜 Сам себя не пригласишь или ссылка недействительна.")
+            referrer_telegram_id = None
+        else:
+            bot.send_message(telegram_id, "🤝 Привет! Ты перешел по реферальной ссылке.")
+
     user = db_manager.get_user(telegram_id)
     if user:
         bot.send_message(telegram_id, f"С возвращением, {user[2]} ☕", reply_markup=main_keyboard())
@@ -278,13 +275,13 @@ def start(message):
 def finish_registration(message, referrer_telegram_id=None):
     """Завершает регистрацию нового пользователя."""
     name = message.text.strip()
+    telegram_id = str(message.chat.id)
     if len(name) < 2:
-        msg = bot.send_message(message.chat.id, "Имя слишком короткое. Попробуй ещё раз.")
+        msg = bot.send_message(telegram_id, "Имя слишком короткое. Попробуй ещё раз.")
         bot.register_next_step_handler(msg, finish_registration, referrer_telegram_id)
         return
-    
-    telegram_id = str(message.chat.id)
-    db_manager.add_user_full(telegram_id, name, referrer_telegram_id=referrer_telegram_id)
+
+    db_manager.add_user_full(telegram_id, name, referrer_telegram_id)
     
     if referrer_telegram_id and db_manager.get_user(referrer_telegram_id):
         db_manager.update_points(referrer_telegram_id, REFERRAL_BONUS)
@@ -337,7 +334,7 @@ def show_cart(message):
         bot.send_message(telegram_id, "Корзина пуста 😢")
         return
     
-    total = sum(it["price"] * it["qty"] for it in items)
+    total = sum(item["price"] * item["qty"] for item in items)
     points = user[5] or 0
     referrals = user[-1] or 0
     
@@ -382,7 +379,7 @@ def activate_15_percent(call):
         bot.answer_callback_query(call.id, "❌ Вы не соответствуете условиям для скидки 15%.")
         return
 
-    total = sum(it["price"] * it["qty"] for it in items)
+    total = sum(item["price"] * item["qty"] for item in items)
     discount = int(total * 0.15)
     final_total = total - discount
     
@@ -417,7 +414,7 @@ def confirm_order_standard(call):
         return
     
     points = user[5] or 0
-    total = sum(it["price"] * it["qty"] for it in items)
+    total = sum(item["price"] * item["qty"] for item in items)
     discount = calc_discount(total, points)
     final_total = total - discount
     
@@ -440,7 +437,7 @@ def confirm_order_challenge(call):
         bot.answer_callback_query(call.id, "❌ Недостаточно баллов для активации скидки.")
         return
         
-    total = sum(it["price"] * it["qty"] for it in items)
+    total = sum(item["price"] * item["qty"] for item in items)
     discount = int(total * 0.15)
     final_total = total - discount
     
@@ -449,14 +446,14 @@ def confirm_order_challenge(call):
 
 def process_order(telegram_id, user, items, final_total, discount, points_spent=0):
     """Общая функция для обработки и завершения заказа."""
-    for it in items:
-        _, qty_in_stock = db_manager.get_stock_by_fullname(it["name"])
-        if qty_in_stock < it["qty"]:
-            bot.send_message(telegram_id, f"❌ Извините, {it['name']} больше нет в наличии.")
+    for item in items:
+        _, qty_in_stock = db_manager.get_stock_by_fullname(item["name"])
+        if qty_in_stock < item["qty"]:
+            bot.send_message(telegram_id, f"❌ Извините, {item['name']} больше нет в наличии.")
             return
             
-    for it in items:
-        db_manager.reduce_stock(it["name"], it["qty"])
+    for item in items:
+        db_manager.reduce_stock(item["name"], item["qty"])
     
     earned = int(final_total * BONUS_PERCENT)
     db_manager.update_points(telegram_id, earned - points_spent)
@@ -464,7 +461,7 @@ def process_order(telegram_id, user, items, final_total, discount, points_spent=
     
     order_id = db_manager.create_order(telegram_id, items, final_total)
     
-    items_text = "; ".join([f"{it['name']} x{it['qty']}" for it in items])
+    items_text = "; ".join(f"{item['name']} x{item['qty']}" for item in items)
     bot.send_message(
         telegram_id,
         f"✅ Заказ №{order_id} оформлен!\n"
@@ -511,21 +508,15 @@ def mark_ready(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("contact_"))
 def contact_user_handler(call):
     """Обработчик для кнопки 'Связаться с клиентом'."""
-    try:
-        _, telegram_id, order_id = call.data.split("_", 2)
-        msg = bot.send_message(call.message.chat.id, f"Напиши сообщение для клиента:")
-        bot.register_next_step_handler(msg, send_admin_message, telegram_id, order_id)
-    except Exception as e:
-        bot.send_message(call.message.chat.id, f"❌ Ошибка при попытке связаться: {e}")
+    _, telegram_id, order_id = call.data.split("_", 2)
+    msg = bot.send_message(call.message.chat.id, "Напиши сообщение для клиента:")
+    bot.register_next_step_handler(msg, send_admin_message, telegram_id, order_id)
 
 def send_admin_message(message, telegram_id, order_id):
     """Отправляет сообщение от админа клиенту."""
-    try:
-        user_msg = message.text
-        bot.send_message(telegram_id, f"📝 Сообщение от администратора по заказу №{order_id}:\n\n{user_msg}")
-        bot.send_message(message.chat.id, "✅ Сообщение успешно отправлено клиенту.")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Не удалось отправить сообщение: {e}")
+    user_msg = message.text
+    bot.send_message(telegram_id, f"📝 Сообщение от администратора по заказу №{order_id}:\n\n{user_msg}")
+    bot.send_message(message.chat.id, "✅ Сообщение успешно отправлено клиенту.")
 
 @bot.message_handler(func=lambda m: m.text == "👤 Мой профиль")
 def show_profile(message):
@@ -543,7 +534,7 @@ def show_profile(message):
         f"👤 <b>Профиль пользователя {user[2]}</b>\n\n"
         f"Твои текущие баллы: <b>{points}</b>\n"
         f"Количество приглашённых друзей: <b>{referrals}</b>\n\n"
-        "🔗 **Челлендж «15% скидка»**:\n"
+        "🔗 <b>Челлендж «15% скидка»</b>:\n"
         f"• Накопить <b>500</b> баллов (у тебя сейчас: {points})\n"
         f"• Пригласить <b>10</b> друзей (у тебя сейчас: {referrals})\n\n"
         "<i>За активацию скидки 15% будет списано 500 баллов.</i>"
@@ -560,7 +551,7 @@ def show_referral_program(message):
         return
 
     text = (
-        "🔗 **Реферальная программа**\n\n"
+        "🔗 <b>Реферальная программа</b>\n\n"
         f"Приглашай друзей и получай {REFERRAL_BONUS} баллов за каждого, кто зарегистрируется по твоей ссылке!\n\n"
         "Твоя реферальная ссылка:\n"
         f"https://t.me/{bot.get_me().username}?start={telegram_id}\n\n"
@@ -626,11 +617,12 @@ def apply_new_item(message):
         return
     try:
         cat, name, size, price, qty = [x.strip() for x in message.text.split(";")]
-        price = int(price); qty = int(qty)
+        price = int(price)
+        qty = int(qty)
         db_manager.admin_update_item(cat, name, size, price, qty)
         bot.send_message(message.chat.id, f"✅ Добавлено: {cat} | {name} {size}л — {price}₽ (остаток {qty})")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка: {e}\nПример: Classic;Латте;0.3;250;10")
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Неверный формат. Пример: Classic;Латте;0.3;250;10")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_add_excel")
 def admin_add_excel_prompt(call):
@@ -667,7 +659,7 @@ def process_excel_upload(message):
                         price = int(price)
                         qty = int(qty)
                         cur.execute("INSERT OR REPLACE INTO stock (category, name, size, price, quantity) VALUES (?, ?, ?, ?, ?)",
-                                     (cat.strip(), name.strip(), str(size).strip(), price, qty))
+                                     (str(cat).strip(), str(name).strip(), str(size).strip(), price, qty))
                         items_added += 1
                     except (ValueError, TypeError):
                         continue
@@ -691,17 +683,19 @@ def apply_update_qty(message):
         return
     try:
         parts = [p.strip() for p in message.text.split(",")]
-        if len(parts) != 2: raise ValueError
+        if len(parts) != 2:
+            raise ValueError
         name_size_str, new_qty_str = parts
         name_parts = name_size_str.rsplit(" ", 1)
-        if len(name_parts) != 2: raise ValueError
+        if len(name_parts) != 2:
+            raise ValueError
         name, size = name_parts[0], name_parts[1].replace("л", "")
         new_qty = int(new_qty_str)
         if db_manager.admin_update_qty(name, size, new_qty):
             bot.send_message(message.chat.id, f"✅ Остаток для {name} {size}л обновлен до {new_qty}.")
         else:
             bot.send_message(message.chat.id, f"❌ Товар '{name} {size}л' не найден.")
-    except Exception:
+    except ValueError:
         bot.send_message(message.chat.id, "❌ Неверный формат. Попробуй еще раз.")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_delete")
@@ -712,23 +706,26 @@ def admin_delete_prompt(call):
 
 def apply_delete_item(message):
     """Удаляет товар из базы данных."""
-    if message.chat.id != ADMIN_GROUP_ID: return
+    if message.chat.id != ADMIN_GROUP_ID:
+        return
     try:
         name_size_str = message.text.strip()
         name_parts = name_size_str.rsplit(" ", 1)
-        if len(name_parts) != 2: raise ValueError
+        if len(name_parts) != 2:
+            raise ValueError
         name, size = name_parts[0], name_parts[1].replace("л", "")
         if db_manager.admin_delete_item(name, size):
             bot.send_message(message.chat.id, f"✅ Товар '{name} {size}л' успешно удален.")
         else:
             bot.send_message(message.chat.id, f"❌ Товар '{name} {size}л' не найден.")
-    except Exception:
+    except ValueError:
         bot.send_message(message.chat.id, "❌ Неверный формат. Попробуй еще раз.")
 
 @bot.message_handler(func=lambda m: m.text == "🧾 Последние заказы")
 def show_recent_orders(message):
     """Показывает список последних 10 заказов."""
-    if message.chat.id != ADMIN_GROUP_ID: return
+    if message.chat.id != ADMIN_GROUP_ID:
+        return
     rows = db_manager.get_recent_orders()
     if not rows:
         bot.send_message(message.chat.id, "🧾 Нет последних заказов.")
@@ -741,15 +738,17 @@ def show_recent_orders(message):
 @bot.message_handler(func=lambda m: m.text == "📊 Статистика")
 def show_stats(message):
     """Показывает общую статистику по заказам и пользователям."""
-    if message.chat.id != ADMIN_GROUP_ID: return
+    if message.chat.id != ADMIN_GROUP_ID:
+        return
     count, revenue, users = db_manager.get_admin_data()
-    text = f"📊 <b>Статистика:</b>\nЗаказов: {count or 0}\nВыручка: {revenue or 0}₽\nПользователей: {users or 0}"
+    text = f"📊 <b>Статистика:</b>\nЗаказов: {count}\nВыручка: {revenue}₽\nПользователей: {users}"
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: m.text == "⚠️ Низкие остатки")
 def show_low_stock(message):
     """Показывает товары с низким остатком."""
-    if message.chat.id != ADMIN_GROUP_ID: return
+    if message.chat.id != ADMIN_GROUP_ID:
+        return
     rows = db_manager.get_low_stock()
     if not rows:
         bot.send_message(message.chat.id, "Все остатки в норме ✅")
@@ -773,16 +772,16 @@ def handle_text(message):
         parts = text.rsplit(" ", 1)
         if len(parts) != 2 or not parts[1].endswith("л"):
             raise ValueError
-            
-        name, size = parts[0], parts[1].replace("л", "").strip()
-        float(size) # Проверка, что размер - число
-    except (ValueError, IndexError):
+        name, size_str = parts
+        size = size_str.replace("л", "").strip()
+        float(size)  # Проверка, что размер - число
+    except ValueError:
         bot.send_message(telegram_id, "❌ Неверный формат. Попробуй ввести название и объем, например: <i>Латте 0.3л</i>", parse_mode="HTML")
         return
 
     price, qty = db_manager.get_stock_by_name_size(name, size)
     
-    if qty < 1:
+    if price is None or qty < 1:
         bot.send_message(telegram_id, f"❌ {name} {size}л закончился.")
         return
     
