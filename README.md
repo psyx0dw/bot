@@ -9,7 +9,7 @@
 
 **📱 Демо:** [@CoffeePalBot](https://t.me/CoffeePalBot)
 
-**👨‍💻 Автор:** [@tamiklung](https://github.com/tamiklung)
+**👨‍💻 Автор:** [@tamiklung](https://github.com/psyx0dw)
 
 ---
 
