@@ -1,7 +1,7 @@
 # config.py
 
-BOT_TOKEN = "8047185520:AAG0c-Ihm1mbKb7AsP5IJhQoHYJz1spIFNE"
-ADMIN_GROUP_ID = "-1002981223017"   # id группы с админами
+BOT_TOKEN = "ВСТАВЬ СВОЙ ТОКЕН"
+ADMIN_GROUP_ID = "ВСТАВЬ СВОЙ АЙДИ"   # id группы с админами
 DB_PATH = "database.db"
 
 # бонусы и скидки (можешь подправить)
