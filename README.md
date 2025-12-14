@@ -514,9 +514,9 @@ copies or substantial portions of the Software.
 ## 👨‍💻 Автор
 
 - **Имя:** tamiklung
-- **GitHub:** [@tamiklung](https://github.com/tamiklung)
+- **GitHub:** [@tamiklung](https://github.com/psyx0dw)
 - **Telegram:** [@tamiklung](https://t.me/tamiklung)
-- **Email:** tamiklung@gmail.com
+- **Email:** jugrace256@gmail.com
 
 ---
 
